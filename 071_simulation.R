@@ -148,7 +148,7 @@ get_performance <- function(row, expanded_dt, c, iter){
   ## GENERATE RANDOM ALGORITHM PERFORMANCE BY SENS/SPEC
   alt_dt[status == 0 & diabetes == 0, alt_status := rbinom(nrow(alt_dt[status == 0 & diabetes == 0]),1,(1-spec))]
   alt_dt[status == 1 & diabetes == 0, alt_status := rbinom(nrow(alt_dt[status == 1 & diabetes == 0]),1,(sens))]
-  alt_dt[status == 0 & diabetes == 1, alt_status := rbinom(nrow(alt_dt[status == 0 & diabetes == 1]),1,(1-spec)*ratio_dspec)]
+  alt_dt[status == 0 & diabetes == 1, alt_status := rbinom(nrow(alt_dt[status == 0 & diabetes == 1]),1,(1-spec*ratio_dspec))]
   alt_dt[status == 1 & diabetes == 1, alt_status := rbinom(nrow(alt_dt[status == 1 & diabetes == 1]),1,(sens)*ratio_dsens)]
   ## GO BACK AND CONTINUE FOR THOSE THAT WE HAVEN'T "CAPTURED YET" - AS IF CONTINUED
   ## TO BE OBSERVED
@@ -162,7 +162,7 @@ get_performance <- function(row, expanded_dt, c, iter){
     alt_expanded_dt[, fu_year := fu_year + max_fu]
     alt_expanded_dt[status == 0 & diabetes == 0, alt_status := rbinom(nrow(alt_expanded_dt[status == 0 & diabetes == 0]),1,(1-spec))]
     alt_expanded_dt[status == 1 & diabetes == 0, alt_status := rbinom(nrow(alt_expanded_dt[status == 1 & diabetes == 0]),1,(sens))]
-    alt_expanded_dt[status == 0 & diabetes == 1, alt_status := rbinom(nrow(alt_expanded_dt[status == 0 & diabetes == 1]),1,(1-spec)*ratio_dspec)]
+    alt_expanded_dt[status == 0 & diabetes == 1, alt_status := rbinom(nrow(alt_expanded_dt[status == 0 & diabetes == 1]),1,(1-spec*ratio_dspec))]
     alt_expanded_dt[status == 1 & diabetes == 1, alt_status := rbinom(nrow(alt_expanded_dt[status == 1 & diabetes == 1]),1,(sens)*ratio_dsens)]
     final_alt_dt <- rbindlist(list(alt_dt[unfinished == 0], alt_expand_dt, alt_expanded_dt),
                               fill = T, use.names = T)
@@ -235,7 +235,7 @@ simulation <- function(n, flexible_model, cov_beta, diabetes_proportion, hazard_
  }
 
 smallparam_dt <- as.data.table(expand.grid(sens = seq(0.4,1,0.1), spec = c(0.8,0.85,0.9,0.95,0.975,1),
-                                           ratio_dsens = seq(0.6,1.4,0.2), ratio_dspec = c(0.6,0.8,1,1.05,1.1,1.15,1.2)))
+                                           ratio_dsens = c(0.85,0.9,0.95,1,1.05,1.1,1.15), ratio_dspec = c(0.85,0.9,0.95,1,1.05,1.1,1.15)))
 smallparam_dt <- smallparam_dt[!(spec*ratio_dspec>1) & !(sens*ratio_dsens > 1)]
 
 print(paste0("Results for censoring time: ", censor_time))

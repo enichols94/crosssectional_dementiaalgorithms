@@ -113,15 +113,13 @@ otheralg_items <- c(age_names, "msex", "educ_u12", "educ_o1216", "educ_1718", "e
 
 test_dt <- copy(dt[testdata == 1])
 
-## follow-up year with max cases
-wave_dt <- test_dt[, .(n = sum(dementia, na.rm = T)), by = "fu_year"]
-test_dt_prev <- copy(test_dt[fu_year == wave_dt[n == max(n), fu_year]])
+## look at sample size for various follow-ups (prevalence test sample)
+test_dt[, .N, by = "fu_year"]
 
 ## all incident and no-dementia cases
 test_dt_inc <- copy(test_dt[prev_dementia == 0])
 
-## get sample sizes
-test_dt_prev[, length(unique(projid))]
+## get sample size
 test_dt_inc[, length(unique(projid))]
 
 get_performance <- function(data, model){
@@ -141,18 +139,49 @@ get_performance <- function(data, model){
   return(list = c(sensitivity = sens, specificity = spec, roc = roc_result, hl_test = hl))
 }
 
+get_roccuts <- function(data, model){
+  dt <- copy(data)
+  model_names <- gsub("[0-9]$", "", rownames(model$gglasso.fit$beta))
+  alg_items <- alg_items[grepl(paste0(model_names, collapse = "|"), alg_items)]
+  alg_preds <- sort(names(test_dt)[grepl(paste0(alg_items, collapse = "|"), names(test_dt))])
+  alg_preds <- c(otheralg_items, alg_preds)
+  
+  dt[, pred := as.numeric(predict(model, newx = as.matrix(dt[, c(alg_preds), with = F]), s = "lambda.min") == 1)]
+  dt[, pred_logodds := predict(model, newx = as.matrix(dt[, c(alg_preds), with = F]), s = "lambda.min", type = "link")]
+  dt[, pred_prob := exp(pred_logodds)/(1+exp(pred_logodds))]
+  
+  get_cut <- function(cut){
+    preds <- dt[, pred_cut := as.numeric(pred_prob > cut)]
+    result_row <- data.table(cut = cut, sens = nrow(dt[dementia == 1 & pred_cut == 1])/nrow(dt[dementia == 1]),
+                             spec_m1 = 1-nrow(dt[dementia == 0 & pred_cut == 0])/nrow(dt[dementia ==0]))
+  }
+  result_dt <- rbindlist(lapply(seq(0,1,0.001), get_cut))
+  return(result_dt)
+}
+
 # TABLE OF PERFORMANCE ----------------------------------------------------
 
 get_chunk <- function(model, name){
-  results_prev <- get_performance(test_dt_prev, model)
-  results_inc <- get_performance(test_dt_inc, model)
+  results <- data.table()
+  for (wave in 5:10){
+    ## follow-up year
+    prev_dt <- copy(test_dt[fu_year == wave]) 
+    ## all incident and no-dementia cases
+    inc_dt <- copy(test_dt[prev_dementia == 0])
+    results_prev <- get_performance(prev_dt, model)
+    results_inc <- get_performance(inc_dt, model)
+    results <- rbind(results, data.table(sens_p = results_prev$sensitivity, sens_i = results_inc$sensitivity,
+                                         spec_p = results_prev$specificity, spec_i = results_inc$specificity,
+                                         auc_p = as.numeric(results_prev$roc.auc), auc_i = as.numeric(results_inc$roc.auc)))
+  }
+  results <- results[, apply(.SD, 2, mean), .SDcols = names(results)]
   table_chunk <- data.table(label = c(name, " Sensitivity", " Specificity", " AUC"),
-                            `Performance for Prevalent Cases` = c("", sprintf("%.3f", results_prev$sensitivity),
-                                                             sprintf("%.3f", results_prev$specificity),
-                                                             sprintf("%.3f", as.numeric(results_prev$roc.auc))),
-                            `Performance for Incident Cases` = c("", sprintf("%.3f", results_inc$sensitivity),
-                                                                 sprintf("%.3f", results_inc$specificity),
-                                                                 sprintf("%.3f", as.numeric(results_inc$roc.auc))))
+                            `Performance for Prevalent Cases` = c("", sprintf("%.3f", results['sens_p']),
+                                                             sprintf("%.3f", results['spec_p']),
+                                                             sprintf("%.3f", results['auc_p'])),
+                            `Performance for Incident Cases` = c("", sprintf("%.3f", results['sens_i']),
+                                                                 sprintf("%.3f", results['spec_i']),
+                                                                 sprintf("%.3f", results['auc_i'])))
   return(table_chunk)
 }
 
@@ -160,27 +189,68 @@ table_dt <- rbindlist(list(get_chunk(model, "All Items"),
                       get_chunk(model2, "MMSE + I/ADLs + Word Recall"),
                       get_chunk(model3, "MMSE + I/ADLs")))
 
+# LOOK ACROSS DIFFERENT WAVES ---------------------------------------------
+
+get_rows <- function(model, name, prev_dt, inc_dt){
+  results_prev <- get_performance(prev_dt, model)
+  results_inc <- get_performance(inc_dt, model)
+  result_dt <- data.table(item_set = name, sensitivity_prev = results_prev$sensitivity, sensitivity_inc = results_inc$sensitivity,
+                          specificity_prev = results_prev$specificity, specificity_inc = results_inc$specificity)
+  return(result_dt)
+}
+
+wave_differences <- function(wave){
+  ## follow-up year
+  test_dt_prev <- copy(test_dt[fu_year == wave]) ## try other follow-up years
+  
+  ## all incident and no-dementia cases
+  test_dt_inc <- copy(test_dt[prev_dementia == 0])
+  
+  results <- rbind(get_rows(model, "All Items", prev_dt = test_dt_prev, inc_dt = test_dt_inc), 
+                   get_rows(model2, "MMSE + I/ADLs + Word Recall", prev_dt = test_dt_prev, inc_dt = test_dt_inc),
+                   get_rows(model3, "MMSE + I/ADLs", prev_dt = test_dt_prev, inc_dt = test_dt_inc))
+  results[, cs_wave := wave]
+  return(results)
+}
+
+allwave_results <- rbindlist(lapply(5:12, wave_differences))
+
 # DIFFERENTIAL PERFORMANCE BY DIABETES STATUS -----------------------------
 
 get_chunk_diabetes <- function(model, name){
-  results_prev_d <- get_performance(test_dt_prev[diabetes_tv == 1], model)
-  results_inc_d <- get_performance(test_dt_inc[diabetes_tv == 1], model)
-  results_prev_nd <- get_performance(test_dt_prev[diabetes_tv == 0], model)
-  results_inc_nd <- get_performance(test_dt_inc[diabetes_tv == 0], model)
+  results <- data.table()
+  for (wave in 5:10){
+    ## follow-up year
+    prev_dt <- copy(test_dt[fu_year == wave]) 
+    ## all incident and no-dementia cases
+    inc_dt <- copy(test_dt[prev_dementia == 0])
+    results_prev_d <- get_performance(prev_dt[diabetes_tv == 1], model)
+    results_inc_d <- get_performance(inc_dt[diabetes_tv == 1], model)
+    results_prev_nd <- get_performance(prev_dt[diabetes_tv == 0], model)
+    results_inc_nd <- get_performance(inc_dt[diabetes_tv == 0], model)
+    
+    results <- rbind(results, data.table(sens_p_d = results_prev_d$sensitivity, sens_i_d = results_inc_d$sensitivity,
+                                         spec_p_d = results_prev_d$specificity, spec_i_d = results_inc_d$specificity,
+                                         auc_p_d = as.numeric(results_prev_d$roc.auc), auc_i_d = as.numeric(results_inc_d$roc.auc),
+                                         sens_p_nd = results_prev_nd$sensitivity, sens_i_nd = results_inc_nd$sensitivity,
+                                         spec_p_nd = results_prev_nd$specificity, spec_i_nd = results_inc_nd$specificity,
+                                         auc_p_nd = as.numeric(results_prev_nd$roc.auc), auc_i_nd = as.numeric(results_inc_nd$roc.auc)))
+  }
+  results <- results[, apply(.SD, 2, mean), .SDcols = names(results)]
 
   table_chunk <- data.table(label = c(name, " Sensitivity", " Specificity", " AUC"),
-                            `Performance for Prevalent Cases - Diabetes` = c("", sprintf("%.3f", results_prev_d$sensitivity),
-                                                                             sprintf("%.3f", results_prev_d$specificity),
-                                                                             sprintf("%.3f", as.numeric(results_prev_d$roc.auc))),
-                            `Performance for Prevalent Cases - No Diabetes` = c("", sprintf("%.3f", results_prev_nd$sensitivity),
-                                                                             sprintf("%.3f", results_prev_nd$specificity),
-                                                                             sprintf("%.3f", as.numeric(results_prev_nd$roc.auc))),
-                            `Performance for Incident Cases - Diabetes` = c("", sprintf("%.3f", results_inc_d$sensitivity),
-                                                                            sprintf("%.3f", results_inc_d$specificity),
-                                                                            sprintf("%.3f", as.numeric(results_inc_d$roc.auc))),
-                            `Performance for Incident Cases - No Diabetes` = c("", sprintf("%.3f", results_inc_nd$sensitivity),
-                                                                               sprintf("%.3f", results_inc_nd$specificity),
-                                                                               sprintf("%.3f", as.numeric(results_inc_nd$roc.auc))))
+                            `Performance for Prevalent Cases - Diabetes` = c("", sprintf("%.3f", results['sens_p_d']),
+                                                                             sprintf("%.3f", results['spec_p_d']),
+                                                                             sprintf("%.3f", results['auc_p_d'])),
+                            `Performance for Prevalent Cases - No Diabetes` = c("", sprintf("%.3f", results['sens_p_nd']),
+                                                                             sprintf("%.3f", results['spec_p_nd']),
+                                                                             sprintf("%.3f", results['auc_p_nd'])),
+                            `Performance for Incident Cases - Diabetes` = c("", sprintf("%.3f", results['sens_i_d']),
+                                                                            sprintf("%.3f", results['spec_i_d']),
+                                                                            sprintf("%.3f", results['auc_i_d'])),
+                            `Performance for Incident Cases - No Diabetes` = c("", sprintf("%.3f", results['sens_i_nd']),
+                                                                               sprintf("%.3f", results['spec_i_nd']),
+                                                                               sprintf("%.3f", results['auc_i_nd'])))
   return(table_chunk)
 }
 
@@ -199,34 +269,61 @@ write.xlsx(full_table, paste0(table_dir, "full_journalpaper_table_", date, ".xls
 # ROC Curves --------------------------------------------------------------
 
 get_roc <- function(model, name, legend = F){
-  results_prev <- get_performance(test_dt_prev, model)
-  results_inc <- get_performance(test_dt_inc, model)
+  
+ get_prev_results <- function(wave, model_obj = model){
+    print(paste0("Getting data for prev wave", wave))
+    ## follow-up year
+    prev_dt <- copy(test_dt[fu_year == wave]) 
+    results_chunk <- get_roccuts(prev_dt, model_obj)
+    results_chunk[, `:=` (measure = "prev", wave_time = wave)]
+    
+    return(results_chunk)
+  }
+  
+  results_dt <- rbindlist(lapply(5:10, get_prev_results))
+  results_dt[, `:=` (sens = mean(sens), spec_m1 = mean(spec_m1)), by = "cut"] ## average performance over waves
+  results_dt[, wave_time := NULL]
+  results_dt <- unique(results_dt)
+  
+  ## add incidence
+  print("Getting data for inc")
+  inc_dt <- copy(test_dt[prev_dementia == 0])
+  results_inc <- get_roccuts(inc_dt, model)
+  results_inc[, `:=` (measure = "inc")]
+  results_dt <- rbind(results_dt, results_inc)
+  results_dt[, label := ifelse(measure == "inc", "Performance on\nIncident Cases", "Performance on\nPrevalent Cases")]
   
   ## ROC PLOTS
-  roc_plot <- ggplot() +
-    geom_line(aes(x = (1-results_prev$roc.specificities), y = results_prev$roc.sensitivities, color = "blue")) +
-    geom_line(aes(x = (1-results_inc$roc.specificities), y = results_inc$roc.sensitivities, color = "red")) +
+  roc_plot <- ggplot(results_dt, aes(x = spec_m1, y = sens, color = label)) +
+    geom_line() +
     labs(x = "1-Specificity", y = "Sensitivity") +
-    scale_color_identity(labels = c("Performance on\nIncident Cases", "Performance on\nPrevalent Cases"),
-                         breaks = c("red", "blue"),
-                         name = "") +
-    geom_text(aes(x = 0.5, y = 0.17, label = paste0("AUC = ", sprintf("%.3f", as.numeric(results_prev$roc.auc))),
-    ), color = "blue") +
-    geom_text(aes(x = 0.5, y = 0.1, label = paste0("AUC = ", sprintf("%.3f", as.numeric(results_inc$roc.auc))),
-    ), color = "red") +
+    scale_color_manual(values = c("Performance on\nIncident Cases" = "red",
+                                  "Performance on\nPrevalent Cases" = "blue"), name = "") +
+    geom_text(aes(x = 0.5, y = 0.17, label = paste0("AUC = ", auc_table[label == name, incidence])), color = "red") +
+    geom_text(aes(x = 0.5, y = 0.1, label = paste0("AUC = ", auc_table[label == name, prevalence])), color = "blue") +
     ggtitle(name) +
     theme_classic() +
-    theme(plot.title = element_text(hjust = 0.5, size = 12))
+    theme(plot.title = element_text(hjust = 0.5, size = 12), legend.position = "none")
   if (legend == T){
-    roc_plot <- roc_plot +
-      scale_color_identity(labels = c("Performance on\nPrevalent Cases", "Performance on\nIncident Cases"),
-                           breaks = c("blue", "red"),
-                           name = "", guide = "legend") +
-      theme(legend.spacing = unit(2, 'cm')) +
-      guides(color = guide_legend(byrow = TRUE))
+    roc_plot <- ggplot(results_dt, aes(x = spec_m1, y = sens, color = label)) +
+      geom_line() +
+      labs(x = "1-Specificity", y = "Sensitivity") +
+      scale_color_manual(values = c("Performance on\nIncident Cases" = "red",
+                                    "Performance on\nPrevalent Cases" = "blue"), name = "") +
+      geom_text(aes(x = 0.5, y = 0.17, label = paste0("AUC = ", auc_table[label == name, incidence])), color = "red") +
+      geom_text(aes(x = 0.5, y = 0.1, label = paste0("AUC = ", auc_table[label == name, prevalence])), color = "blue") +
+      ggtitle(name) +
+      theme_classic() +
+      theme(plot.title = element_text(hjust = 0.5, size = 12), legend.position = "right")
   }  
   return(roc_plot)
 }
+
+## CREATE TABLES OF AVERAGED AUC'S TO INPUT INTO GRAPHS
+auc_table <- copy(table_dt[label == " AUC" | `Performance for Prevalent Cases` == ""])
+setnames(auc_table, names(auc_table), c("label", "prevalence", "incidence"))
+auc_table[, `:=` (prevalence = lead(prevalence), incidence = lead(incidence))]
+auc_table <- auc_table[!label == " AUC"]
 
 roc_full <- plot_grid(get_roc(model, "All Items"), get_roc(model2, "MMSE + I/ADLs + Word Recall"),
                  get_roc(model3, "MMSE + I/ADLs", legend = T), nrow = 1, rel_widths = c(1,1,1.55))

@@ -28,9 +28,9 @@ alg_items <- variable_map[, new_name]
 
 # GET PREDICTIONS ---------------------------------------------------------
 
-get_preddata <- function(date){
+get_preddata <- function(date, model = "model"){
   model_dir <- paste0(FILEPATH, date, "/")
-  model <- read_rds(paste0(model_dir, "model.rds"))
+  model <- read_rds(paste0(model_dir, model, ".rds"))
   
   dt <- readr::read_rds(paste0(derived_dir, "rosmap_formatted.rds"))
   
@@ -124,6 +124,7 @@ get_preddata <- function(date){
 }
 
 fullmodel_preds <- get_preddata(cs_model_date)
+smallmodel_preds <- get_preddata(cs_model_date, model = "smallest_model")
 
 # GET SURVIVAL DATA -------------------------------------------------------
 
@@ -187,6 +188,7 @@ do_survival <- function(data, outcome){
 
 sdt_goldstandard <- do_survival(fullmodel_preds, "dementia")
 sdt_full <- do_survival(fullmodel_preds, "pred")
+sdt_small <- do_survival(smallmodel_preds, "pred")
 
 # CREATE GRAPHS -----------------------------------------------------------
 
@@ -195,22 +197,24 @@ sdt_full <- do_survival(fullmodel_preds, "pred")
 sfit_gs <- survfit(Surv(time, end_time, outcome) ~ diabetes_tv, data = sdt_goldstandard)
 splot_gs <- ggsurvplot(sfit_gs, palette = c("deepskyblue4", "deepskyblue3"), 
                        legend.title = "", legend.labs = c("No Diabetes", "Diabetes"),
-                       xlab = "Time (years from baseline)", title = "[A]", legend = "bottom")
+                       xlab = "Time (years from baseline)", title = "A.", legend = "bottom")
 
 # PANEL B FULL ALGORITHM PREV/INC -----------------------------------------
 
 sfit_f <- survfit(Surv(time, end_time, outcome) ~ diabetes_tv, data = sdt_full)
+sfit_s <- survfit(Surv(time, end_time, outcome) ~ diabetes_tv, data = sdt_small)
 
-splot_fcomb <- ggsurvplot(fit = list("Gold Standard" = sfit_gs, "Algorithm" = sfit_f), 
+splot_fcomb <- ggsurvplot(fit = list("Gold Standard" = sfit_gs, "Full Algorithm" = sfit_f, "Small Algorithm" = sfit_s), 
                           combine = T, legend.title = "", 
                           legend.labs = c("Gold Standard:\nNo Diabetes", "Gold Standard:\nDiabetes",
-                                          "Algorithm:\nNo Diabetes", "Algorithm:\nDiabetes"),
-                          xlab = "Time (years from baseline)", title = "[B]", legend = "bottom",
+                                          "Full Algorithm:\nNo Diabetes", "Full Algorithm:\nDiabetes",
+                                          "Small Algorithm:\nNo Diabetes", "Small Algorithm:\nDiabetes"),
+                          xlab = "Time (years from baseline)", title = "B.", legend = "bottom",
                           palette = c("deepskyblue4", "deepskyblue3", 
-                                      "mediumpurple4", "mediumpurple3")) +
+                                      "mediumpurple4", "mediumpurple3",
+                                      "#F29D7E", "#F22E2E")) +
   guides(colour = guide_legend(nrow = 2))
 
 full_graph <- plot_grid(splot_gs$plot, splot_fcomb$plot, nrow = 1, align = "h", axis = "tb")
 
-ggsave(paste0(plot_dir, "km_plot_", date, ".pdf"), plot = full_graph, height = 5, width = 10)
-
+ggsave(paste0(plot_dir, "km_plot_", date, ".tiff"), plot = full_graph, height = 5, width = 10)

@@ -29,9 +29,9 @@ alg_items <- variable_map[, new_name]
 
 # GET PREDICTIONS ---------------------------------------------------------
 
-get_preddata <- function(date){
+get_preddata <- function(date, model = "model"){
   model_dir <- paste0(FILEPATH, date, "/")
-  model <- read_rds(paste0(model_dir, "model.rds"))
+  model <- read_rds(paste0(model_dir, model, ".rds"))
   
   dt <- readr::read_rds(paste0(derived_dir, "rosmap_formatted.rds"))
   
@@ -126,6 +126,7 @@ get_preddata <- function(date){
 }
 
 fullmodel_preds <- get_preddata(cs_model_date)
+smallmodel_preds <- get_preddata(cs_model_date, model = "smallest_model")
 
 # DO SURVIVAL ANALYSIS ----------------------------------------------------
 
@@ -215,7 +216,7 @@ do_survival <- function(row){
   return(list(model0 = model_unadjusted, model1 = model1, model2 = model_final))
 }
 
-model_frame <- data.table(data = c(rep("fullmodel_preds", 2)),
+model_frame <- data.table(data = c(rep("fullmodel_preds", 2), rep("smallmodel_preds", 2)),
                           outcome = c("dementia", "pred"),
                           name = c("Gold Standard", "Algorithm"))
 
@@ -255,3 +256,7 @@ get_coefs <- function(row){
 }
 
 coef_dt <- rbindlist(lapply(1:nrow(model_frame), get_coefs))
+
+## INDICATOR FOR TWO SETS OF MODELS
+coef_dt[, N := 1:.N]
+coef_dt[, pred_version := ifelse(N <= nrow(coef_dt)/2, "All predictors", "MMSE + I/ADLs")]
